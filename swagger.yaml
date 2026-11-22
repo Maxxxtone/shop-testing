@@ -1,0 +1,569 @@
+openapi: 3.0.3
+info:
+  title: E-commerce API
+  version: 1.2.0
+  description: |
+    Учебный API интернет-магазина для отработки тестирования в Postman.
+
+    **Возможности:**
+    - JWT-аутентификация (роли `admin` и `customer`)
+    - CRUD товаров (создание/изменение/удаление — только admin)
+    - Поиск по имени, фильтры, сортировка, пагинация
+    - Категории с подсчётом товаров
+    - Корзина пользователя
+
+    **Тестовые пользователи (после `npm run seed`):**
+    - `admin@shop.local` / `admin123` — роль admin
+    - `alice@test.com` / `alice123` — роль customer
+    - `bob@test.com` / `bob123` — роль customer
+
+servers:
+  - url: http://localhost:3000/api
+    description: Local development
+  - url: http://localhost:3000/api
+    description: (тот же) — для переключения окружений в Postman
+
+tags:
+  - name: Auth
+    description: Регистрация и логин
+  - name: Users
+    description: Профиль пользователя
+  - name: Products
+    description: Товары — публичный каталог и админ-CRUD
+  - name: Categories
+    description: Категории товаров
+  - name: Cart
+    description: Корзина текущего пользователя
+  - name: System
+    description: Служебные эндпоинты
+
+paths:
+  # ────────────────────────────── AUTH ──────────────────────────────
+  /auth/register:
+    post:
+      summary: Регистрация пользователя
+      tags: [Auth]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email:
+                  type: string
+                  format: email
+                  example: student@test.com
+                password:
+                  type: string
+                  minLength: 6
+                  example: password123
+                full_name:
+                  type: string
+                  example: Иван Петров
+      responses:
+        '201':
+          description: Пользователь создан
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  user:
+                    $ref: '#/components/schemas/User'
+                  token:
+                    type: string
+                    example: eyJhbGciOiJIUzI1NiIs...
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '409':
+          description: Email уже существует
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example: { error: "Email already exists" }
+
+  /auth/login:
+    post:
+      summary: Авторизация, выдача JWT
+      tags: [Auth]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email:
+                  type: string
+                  example: alice@test.com
+                password:
+                  type: string
+                  example: alice123
+      responses:
+        '200':
+          description: Успешный логин
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  token:
+                    type: string
+                    example: eyJhbGciOiJIUzI1NiIs...
+                  user:
+                    $ref: '#/components/schemas/User'
+        '401':
+          description: Неверные учётные данные
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example: { error: "Invalid credentials" }
+
+  # ────────────────────────────── USERS ─────────────────────────────
+  /users/me:
+    get:
+      summary: Профиль текущего пользователя
+      tags: [Users]
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Данные пользователя
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/User' }
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  # ───────────────────────────── PRODUCTS ───────────────────────────
+  /products:
+    get:
+      summary: Список товаров с фильтрами, сортировкой и пагинацией
+      tags: [Products]
+      parameters:
+        - in: query
+          name: q
+          description: Поиск по названию (частичное, регистронезависимое)
+          schema: { type: string }
+          example: ноут
+        - in: query
+          name: category
+          description: Slug категории
+          schema: { type: string, enum: [electronics, accessories, peripherals, audio, smart-home] }
+          example: audio
+        - in: query
+          name: min_price
+          schema: { type: number, minimum: 0 }
+          example: 10000
+        - in: query
+          name: max_price
+          schema: { type: number, minimum: 0 }
+          example: 30000
+        - in: query
+          name: sort
+          schema:
+            type: string
+            enum: [id_asc, id_desc, price_asc, price_desc, title_asc, title_desc, created_desc]
+            default: id_asc
+        - in: query
+          name: page
+          schema: { type: integer, minimum: 1, default: 1 }
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+      responses:
+        '200':
+          description: Страница товаров
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/Product' }
+                  page: { type: integer, example: 1 }
+                  limit: { type: integer, example: 20 }
+                  count: { type: integer, example: 20 }
+    post:
+      summary: Создать товар (только admin)
+      tags: [Products]
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title, price]
+              properties:
+                title: { type: string, example: Новый товар }
+                description: { type: string, example: Описание товара }
+                price: { type: number, minimum: 0, example: 999.99 }
+                stock: { type: integer, minimum: 0, default: 0, example: 10 }
+                category_id: { type: integer, nullable: true, example: 1 }
+                sku: { type: string, nullable: true, example: NEW-SKU-001 }
+      responses:
+        '201':
+          description: Товар создан
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Product' }
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          description: SKU уже существует
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example: { error: "SKU already exists" }
+
+  /products/search:
+    get:
+      summary: Поиск товаров по имени
+      tags: [Products]
+      parameters:
+        - in: query
+          name: name
+          required: true
+          description: Подстрока для поиска в названии
+          schema: { type: string }
+          example: ноут
+      responses:
+        '200':
+          description: Результаты поиска
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  query: { type: string, example: ноут }
+                  count: { type: integer, example: 3 }
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/ProductShort' }
+        '400':
+          description: Параметр name обязателен
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example: { error: "name query param is required" }
+
+  /products/{id}:
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: integer }
+        example: 1
+    get:
+      summary: Получить товар по id
+      tags: [Products]
+      responses:
+        '200':
+          description: Товар
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Product' }
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    put:
+      summary: Обновить товар (только admin)
+      tags: [Products]
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                title: { type: string }
+                description: { type: string }
+                price: { type: number, minimum: 0 }
+                stock: { type: integer, minimum: 0 }
+                category_id: { type: integer, nullable: true }
+                is_active: { type: boolean }
+      responses:
+        '200':
+          description: Обновлённый товар
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Product' }
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    delete:
+      summary: Удалить товар (только admin)
+      tags: [Products]
+      security:
+        - bearerAuth: []
+      responses:
+        '204':
+          description: Удалено
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  # ──────────────────────────── CATEGORIES ──────────────────────────
+  /categories:
+    get:
+      summary: Список категорий с количеством товаров
+      tags: [Categories]
+      responses:
+        '200':
+          description: Массив категорий
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Category' }
+
+  # ────────────────────────────── CART ──────────────────────────────
+  /cart:
+    get:
+      summary: Корзина текущего пользователя
+      tags: [Cart]
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Элементы корзины и итог
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/CartItem' }
+                  total: { type: number, example: 15980 }
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    post:
+      summary: Добавить товар в корзину
+      tags: [Cart]
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [product_id]
+              properties:
+                product_id: { type: integer, example: 1 }
+                quantity: { type: integer, minimum: 1, default: 1, example: 2 }
+      responses:
+        '201':
+          description: Добавлено
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CartItemRaw' }
+        '400':
+          description: Не хватает на складе или не передан product_id
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: Товар не найден
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example: { error: "Product not found" }
+
+  /cart/{id}:
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema: { type: integer }
+        example: 1
+    put:
+      summary: Изменить количество
+      tags: [Cart]
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [quantity]
+              properties:
+                quantity: { type: integer, minimum: 1, example: 5 }
+      responses:
+        '200':
+          description: Обновлено
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CartItemRaw' }
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    delete:
+      summary: Удалить из корзины
+      tags: [Cart]
+      security:
+        - bearerAuth: []
+      responses:
+        '204':
+          description: Удалено
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  # ───────────────────────────── SYSTEM ─────────────────────────────
+  /health:
+    get:
+      summary: Проверка состояния сервера и БД
+      tags: [System]
+      servers:
+        - url: http://localhost:3000
+          description: Без префикса /api
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: ok }
+        '500':
+          description: БД недоступна
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: "db error" }
+
+# ─────────────────────────── COMPONENTS ─────────────────────────────
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        JWT из `/auth/login` или `/auth/register`.
+        Формат: `Authorization: Bearer <token>`
+
+  schemas:
+    User:
+      type: object
+      properties:
+        id: { type: integer, example: 1 }
+        email: { type: string, example: alice@test.com }
+        full_name: { type: string, example: Алиса Иванова }
+        role: { type: string, enum: [customer, admin], example: customer }
+        created_at: { type: string, format: date-time, example: "2025-11-22T10:00:00.000Z" }
+
+    Category:
+      type: object
+      properties:
+        id: { type: integer, example: 1 }
+        name: { type: string, example: Электроника }
+        slug: { type: string, example: electronics }
+        products_count: { type: integer, example: 6 }
+        created_at: { type: string, format: date-time }
+
+    Product:
+      type: object
+      properties:
+        id: { type: integer, example: 1 }
+        title: { type: string, example: Ноутбук Lenovo IdeaPad 3 }
+        description: { type: string, example: '15.6", Ryzen 5, 16GB RAM, 512GB SSD' }
+        price: { type: number, example: 64990 }
+        stock: { type: integer, example: 15 }
+        sku: { type: string, nullable: true, example: LEN-IP3-001 }
+        is_active: { type: boolean, example: true }
+        category_id: { type: integer, nullable: true, example: 1 }
+        category_name: { type: string, nullable: true, example: Электроника }
+        category_slug: { type: string, nullable: true, example: electronics }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    ProductShort:
+      type: object
+      properties:
+        id: { type: integer, example: 1 }
+        title: { type: string, example: Ноутбук Lenovo IdeaPad 3 }
+        price: { type: number, example: 64990 }
+        stock: { type: integer, example: 15 }
+
+    CartItem:
+      type: object
+      properties:
+        id: { type: integer, example: 1 }
+        quantity: { type: integer, example: 2 }
+        product_id: { type: integer, example: 1 }
+        title: { type: string, example: Мышь Logitech MX Master 3 }
+        price: { type: number, example: 7990 }
+        stock: { type: integer, example: 20 }
+        subtotal: { type: number, example: 15980 }
+
+    CartItemRaw:
+      type: object
+      properties:
+        id: { type: integer, example: 1 }
+        user_id: { type: integer, example: 2 }
+        product_id: { type: integer, example: 1 }
+        quantity: { type: integer, example: 2 }
+
+    Error:
+      type: object
+      properties:
+        error: { type: string, example: "Invalid credentials" }
+
+  responses:
+    BadRequest:
+      description: Некорректный запрос
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example: { error: "email and password are required" }
+    Unauthorized:
+      description: Требуется авторизация
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example: { error: "Missing or invalid Authorization header" }
+    Forbidden:
+      description: Недостаточно прав (нужна роль admin)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example: { error: "Admin role required" }
+    NotFound:
+      description: Ресурс не найден
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example: { error: "Product not found" }
