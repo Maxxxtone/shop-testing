@@ -30,6 +30,9 @@ psql -U postgres
 
 > Если получаете `role "postgres" does not exist` — суперпользователь у вас называется иначе (например, ваше системное имя). Используйте `psql -U <ваше_имя> -d postgres` и это же имя укажите в `.env` ниже.
 
+```bash
+CREATE DATABASE ecommerce_api;
+```
 Примените схему:
 
 ```bash
